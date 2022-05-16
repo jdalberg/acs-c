@@ -5,6 +5,7 @@ edition = "2021"
 authors = ["Jesper Dalberg"]
 
 [dependencies]
+cwmp = "0.2"
 tokio = {version = "1", features = ["full"]}
 tokio-trace = "0.1"
 env_logger = "0.9"
