@@ -47,6 +47,8 @@ pub struct Client {
 struct ClientRef {
     // A way to transfer messages upstream
     http_client: reqwest::Client,
+    doc_model: String,
+    hyper_task: hyper,
 }
 
 #[must_use]
@@ -110,10 +112,27 @@ impl ClientBuilder {
         if let Some(err) = self.config.error {
             return Err(err);
         }
+        // create the hyper task
+        let port = self.config.conn_req_port;
+        let addr = ([127, 0, 0, 1], port).into();
+        debug!("Listening for Connection Requests on http://{}", addr);
+        let make_service = make_service_fn(move |_conn| {
+            let cr_tx = connection_request_tx.clone();
+
+            async move {
+                Ok::<_, Infallible>(service_fn(move |req: Request<Body>| {
+                    let cr_tx = cr_tx.clone();
+
+                    serve_connection_request(req, cr_tx)
+                }))
+            }
+        });
 
         Ok(Client {
             inner: Arc::new(ClientRef {
                 http_client: reqwest::Client::new(),
+                doc_model: self.config.doc_model.clone(),
+                hyper_task: Server::bind(&addr).serve(make_service),
             }),
         })
     }
@@ -177,27 +196,10 @@ impl Client {
 
         // if periodic informs are enabled, start a timer to handle it
 
-        // create the hyper task
-        let port = self.config.conn_req_port;
-        let addr = ([127, 0, 0, 1], port).into();
-        debug!("Listening for Connection Requests on http://{}", addr);
-        let make_service = make_service_fn(move |_conn| {
-            let cr_tx = connection_request_tx.clone();
-
-            async move {
-                Ok::<_, Infallible>(service_fn(move |req: Request<Body>| {
-                    let cr_tx = cr_tx.clone();
-
-                    serve_connection_request(req, cr_tx)
-                }))
-            }
-        });
-
-        let hyper_task = Server::bind(&addr).serve(make_service);
         let message_processor =
             self.process_messages(periodic_rx, connection_request_rx, notification_change_rx);
         let notification_watcher = self.watch_notifications(notification_change_tx);
-        let res = join!(hyper_task, message_processor, notification_watcher);
+        let res = join!(message_processor, notification_watcher);
     }
 }
 
