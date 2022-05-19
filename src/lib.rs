@@ -2,6 +2,7 @@ use error::BoxError;
 use log::debug;
 use std::convert::Infallible;
 use std::sync::Arc;
+use tokio::join;
 use tokio::sync::mpsc::Sender;
 
 #[macro_use]
@@ -49,7 +50,7 @@ struct ClientRef {
 }
 
 #[must_use]
-struct ClientBuilder {
+pub struct ClientBuilder {
     config: Config,
 }
 
@@ -106,9 +107,7 @@ impl ClientBuilder {
     /// This method fails if a TLS backend cannot be initialized, or the resolver
     /// cannot load the system configuration.
     pub fn build(self) -> crate::Result<Client> {
-        let config = self.config;
-
-        if let Some(err) = config.error {
+        if let Some(err) = self.config.error {
             return Err(err);
         }
 
@@ -118,10 +117,32 @@ impl ClientBuilder {
             }),
         })
     }
+}
+
+impl Client {
+    /// Constructs a new `Client`.
+    ///
+    /// # Panics
+    ///
+    /// This method panics if a TLS backend cannot be initialized, or the resolver
+    /// cannot load the system configuration.
+    ///
+    /// Use `Client::builder()` if you wish to handle the failure as an `Error`
+    /// instead of panicking.
+    pub fn new() -> Client {
+        ClientBuilder::new().build().expect("Client::new()")
+    }
+
+    /// Creates a `ClientBuilder` to configure a `Client`.
+    ///
+    /// This is the same as `ClientBuilder::new()`.
+    pub fn builder() -> ClientBuilder {
+        ClientBuilder::new()
+    }
 
     /// process all the message types.
     async fn process_messages(
-        self,
+        &self,
         mut periodic_rx: Receiver<u32>,
         mut connection_request_rx: Receiver<u32>,
         mut notification_change_rx: Receiver<String>,
@@ -139,6 +160,8 @@ impl ClientBuilder {
         }
     }
 
+    async fn watch_notifications(&self, notification_change_tx: Sender<String>) {}
+
     /// Starts the tasks.
     ///
     /// A connection request listener task
@@ -147,9 +170,10 @@ impl ClientBuilder {
     /// The message processor
     ///
     /// Once the tasks are started, send the initial INFORM
-    async fn run(self) {
+    async fn run(&self) {
         let (periodic_tx, periodic_rx) = mpsc::channel::<u32>(100);
         let (connection_request_tx, connection_request_rx) = mpsc::channel::<u32>(100);
+        let (notification_change_tx, notification_change_rx) = mpsc::channel::<String>(100);
 
         // if periodic informs are enabled, start a timer to handle it
 
@@ -170,14 +194,26 @@ impl ClientBuilder {
         });
 
         let hyper_task = Server::bind(&addr).serve(make_service);
+        let message_processor =
+            self.process_messages(periodic_rx, connection_request_rx, notification_change_rx);
+        let notification_watcher = self.watch_notifications(notification_change_tx);
+        let res = join!(hyper_task, message_processor, notification_watcher);
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use super::Client;
+
     #[test]
     fn it_works() {
         let result = 2 + 2;
         assert_eq!(result, 4);
+    }
+
+    #[tokio::test]
+    async fn connection_requests() {
+        let client = Client::new();
+        assert!(true);
     }
 }

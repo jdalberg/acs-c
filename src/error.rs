@@ -5,7 +5,7 @@ use std::{error::Error as StdError, fmt, io};
 /// A `Result` alias where the `Err` case is `reqwest::Error`.
 pub type Result<T> = std::result::Result<T, Error>;
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub(crate) enum Kind {
     Builder,
     Request,
@@ -185,4 +185,20 @@ impl Error {
     pub(crate) fn into_io(self) -> io::Error {
         io::Error::new(io::ErrorKind::Other, self)
     }
+}
+
+pub(crate) fn builder<E: Into<BoxError>>(e: E) -> Error {
+    Error::new(Kind::Builder, Some(e))
+}
+
+pub(crate) fn body<E: Into<BoxError>>(e: E) -> Error {
+    Error::new(Kind::Body, Some(e))
+}
+
+pub(crate) fn decode<E: Into<BoxError>>(e: E) -> Error {
+    Error::new(Kind::Decode, Some(e))
+}
+
+pub(crate) fn request<E: Into<BoxError>>(e: E) -> Error {
+    Error::new(Kind::Request, Some(e))
 }
