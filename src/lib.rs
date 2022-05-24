@@ -48,7 +48,8 @@ struct ClientRef {
     // A way to transfer messages upstream
     http_client: reqwest::Client,
     doc_model: String,
-    hyper_task: hyper,
+    connection_request_tx: Sender<u32>,
+    connection_request_rx: Receiver<u32>,
 }
 
 #[must_use]
@@ -112,6 +113,8 @@ impl ClientBuilder {
         if let Some(err) = self.config.error {
             return Err(err);
         }
+        let (connection_request_tx, connection_request_rx) = mpsc::channel::<u32>(100);
+
         // create the hyper task
         let port = self.config.conn_req_port;
         let addr = ([127, 0, 0, 1], port).into();
@@ -133,6 +136,8 @@ impl ClientBuilder {
                 http_client: reqwest::Client::new(),
                 doc_model: self.config.doc_model.clone(),
                 hyper_task: Server::bind(&addr).serve(make_service),
+                connection_request_rx: connection_request_rx,
+                connection_request_tx: connection_request_tx,
             }),
         })
     }
@@ -163,14 +168,13 @@ impl Client {
     async fn process_messages(
         &self,
         mut periodic_rx: Receiver<u32>,
-        mut connection_request_rx: Receiver<u32>,
         mut notification_change_rx: Receiver<String>,
     ) {
         tokio::select! {
             periodic_timeout = periodic_rx.recv() => {
                 dbg!(periodic_timeout);
             }
-            connection_request = connection_request_rx.recv() => {
+            connection_request = self.connection_request_rx.recv() => {
                 dbg!(connection_request);
             }
             notification_param_changed = notification_change_rx.recv() => {
@@ -191,13 +195,11 @@ impl Client {
     /// Once the tasks are started, send the initial INFORM
     async fn run(&self) {
         let (periodic_tx, periodic_rx) = mpsc::channel::<u32>(100);
-        let (connection_request_tx, connection_request_rx) = mpsc::channel::<u32>(100);
         let (notification_change_tx, notification_change_rx) = mpsc::channel::<String>(100);
 
         // if periodic informs are enabled, start a timer to handle it
 
-        let message_processor =
-            self.process_messages(periodic_rx, connection_request_rx, notification_change_rx);
+        let message_processor = self.process_messages(periodic_rx, notification_change_rx);
         let notification_watcher = self.watch_notifications(notification_change_tx);
         let res = join!(message_processor, notification_watcher);
     }
